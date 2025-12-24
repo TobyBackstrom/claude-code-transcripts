@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Convert logs.db to a clean mobile-friendly HTML page with pagination."""
+"""Convert Claude Code session JSON to a clean mobile-friendly HTML page with pagination."""
 
-import sqlite3
+import argparse
 import json
 import html
 import re
@@ -12,9 +12,40 @@ import markdown
 # Regex to match git commit output: [branch hash] message
 COMMIT_PATTERN = re.compile(r'\[[\w\-/]+ ([a-f0-9]{7,})\] (.+?)(?:\n|$)')
 
+# Regex to detect GitHub repo from git push output (e.g., github.com/owner/repo/pull/new/branch)
+GITHUB_REPO_PATTERN = re.compile(r'github\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)/pull/new/')
+
 PROMPTS_PER_PAGE = 5
 LONG_TEXT_THRESHOLD = 1000  # Characters - text blocks longer than this are shown in index
-GITHUB_REPO = "simonw/mquickjs-python"  # For commit links
+
+# Module-level variable for GitHub repo (set by generate_html)
+_github_repo = None
+
+
+def detect_github_repo(loglines):
+    """
+    Detect GitHub repo from git push output in tool results.
+
+    Looks for patterns like:
+    - github.com/owner/repo/pull/new/branch (from git push messages)
+
+    Returns the first detected repo (owner/name) or None.
+    """
+    for entry in loglines:
+        message = entry.get("message", {})
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                result_content = block.get("content", "")
+                if isinstance(result_content, str):
+                    match = GITHUB_REPO_PATTERN.search(result_content)
+                    if match:
+                        return match.group(1)
+    return None
 
 
 def format_json(obj):
@@ -91,6 +122,17 @@ def render_edit_tool(tool_input, tool_id):
 </div>'''
 
 
+def render_bash_tool(tool_input, tool_id):
+    """Render Bash tool calls with command as plain text."""
+    command = tool_input.get("command", "")
+    description = tool_input.get("description", "")
+    desc_html = f'<div class="tool-description">{html.escape(description)}</div>' if description else ""
+    return f'''<div class="tool-use bash-tool" data-tool-id="{html.escape(tool_id)}">
+<div class="tool-header"><span class="tool-icon">$</span> Bash</div>
+{desc_html}<div class="truncatable"><div class="truncatable-content"><pre class="bash-command">{html.escape(command)}</pre></div><button class="expand-btn">Show more</button></div>
+</div>'''
+
+
 def render_content_block(block):
     if not isinstance(block, dict):
         return f"<p>{html.escape(str(block))}</p>"
@@ -109,6 +151,8 @@ def render_content_block(block):
             return render_write_tool(tool_input, tool_id)
         if tool_name == "Edit":
             return render_edit_tool(tool_input, tool_id)
+        if tool_name == "Bash":
+            return render_bash_tool(tool_input, tool_id)
         description = tool_input.get("description", "")
         desc_html = f'<div class="tool-description">{html.escape(description)}</div>' if description else ""
         display_input = {k: v for k, v in tool_input.items() if k != "description"}
@@ -133,8 +177,11 @@ def render_content_block(block):
 
                     commit_hash = match.group(1)
                     commit_msg = match.group(2)
-                    github_link = f'https://github.com/{GITHUB_REPO}/commit/{commit_hash}'
-                    parts.append(f'<div class="commit-card"><a href="{github_link}"><span class="commit-card-hash">{commit_hash[:7]}</span> {html.escape(commit_msg)}</a></div>')
+                    if _github_repo:
+                        github_link = f'https://github.com/{_github_repo}/commit/{commit_hash}'
+                        parts.append(f'<div class="commit-card"><a href="{github_link}"><span class="commit-card-hash">{commit_hash[:7]}</span> {html.escape(commit_msg)}</a></div>')
+                    else:
+                        parts.append(f'<div class="commit-card"><span class="commit-card-hash">{commit_hash[:7]}</span> {html.escape(commit_msg)}</div>')
                     last_end = match.end()
 
                 # Add any remaining content after last commit
@@ -247,6 +294,19 @@ def format_tool_stats(tool_counts):
     return " · ".join(parts)
 
 
+def is_tool_result_message(message_data):
+    """Check if a message contains only tool_result blocks."""
+    content = message_data.get("content", [])
+    if not isinstance(content, list):
+        return False
+    if not content:
+        return False
+    return all(
+        isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in content
+    )
+
+
 def render_message(log_type, message_json, timestamp):
     if not message_json:
         return ""
@@ -256,7 +316,11 @@ def render_message(log_type, message_json, timestamp):
         return ""
     if log_type == "user":
         content_html = render_user_message_content(message_data)
-        role_class, role_label = "user", "User"
+        # Check if this is a tool result message
+        if is_tool_result_message(message_data):
+            role_class, role_label = "tool-reply", "Tool reply"
+        else:
+            role_class, role_label = "user", "User"
     elif log_type == "assistant":
         content_html = render_assistant_message(message_data)
         role_class, role_label = "assistant", "Assistant"
@@ -277,6 +341,8 @@ h1 { font-size: 1.5rem; margin-bottom: 24px; padding-bottom: 8px; border-bottom:
 .message { margin-bottom: 16px; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .message.user { background: var(--user-bg); border-left: 4px solid var(--user-border); }
 .message.assistant { background: var(--card-bg); border-left: 4px solid var(--assistant-border); }
+.message.tool-reply { background: #fff8e1; border-left: 4px solid #ff9800; }
+.tool-reply .role-label { color: #e65100; }
 .message-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: rgba(0,0,0,0.03); font-size: 0.85rem; }
 .role-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 .user .role-label { color: var(--user-border); }
@@ -310,10 +376,12 @@ time { color: var(--text-muted); font-size: 0.8rem; }
 .file-content { margin: 0; }
 .edit-section { display: flex; margin: 4px 0; border-radius: 4px; overflow: hidden; }
 .edit-label { padding: 8px 12px; font-weight: bold; font-family: monospace; display: flex; align-items: flex-start; }
-.edit-old { background: #ffebee; }
-.edit-old .edit-label { color: #c62828; background: #ffcdd2; }
+.edit-old { background: #fce4ec; }
+.edit-old .edit-label { color: #b71c1c; background: #f8bbd9; }
+.edit-old .edit-content { color: #880e4f; }
 .edit-new { background: #e8f5e9; }
-.edit-new .edit-label { color: #2e7d32; background: #c8e6c9; }
+.edit-new .edit-label { color: #1b5e20; background: #a5d6a7; }
+.edit-new .edit-content { color: #1b5e20; }
 .edit-content { margin: 0; flex: 1; background: transparent; font-size: 0.85rem; }
 .edit-replace-all { font-size: 0.75rem; font-weight: normal; color: var(--text-muted); }
 .write-tool .truncatable.truncated::after { background: linear-gradient(to bottom, transparent, #e6f4ea); }
@@ -339,6 +407,7 @@ pre code { background: none; padding: 0; }
 .truncatable.truncated .truncatable-content { max-height: 200px; overflow: hidden; }
 .truncatable.truncated::after { content: ''; position: absolute; bottom: 32px; left: 0; right: 0; height: 60px; background: linear-gradient(to bottom, transparent, var(--card-bg)); pointer-events: none; }
 .message.user .truncatable.truncated::after { background: linear-gradient(to bottom, transparent, var(--user-bg)); }
+.message.tool-reply .truncatable.truncated::after { background: linear-gradient(to bottom, transparent, #fff8e1); }
 .tool-use .truncatable.truncated::after { background: linear-gradient(to bottom, transparent, var(--tool-bg)); }
 .tool-result .truncatable.truncated::after { background: linear-gradient(to bottom, transparent, var(--tool-result-bg)); }
 .expand-btn { display: none; width: 100%; padding: 8px 16px; margin-top: 4px; background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.1); border-radius: 6px; cursor: pointer; font-size: 0.85rem; color: var(--text-muted); }
@@ -450,27 +519,39 @@ def generate_index_pagination_html(total_pages):
     return '\n'.join(parts)
 
 
-def generate_html(db_path, output_dir):
+def generate_html(json_path, output_dir, github_repo=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("SELECT type, message, timestamp, isCompactSummary FROM logs ORDER BY timestamp ASC")
-    rows = cursor.fetchall()
-    conn.close()
+
+    # Load JSON file
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    loglines = data.get("loglines", [])
+
+    # Auto-detect GitHub repo if not provided
+    if github_repo is None:
+        github_repo = detect_github_repo(loglines)
+        if github_repo:
+            print(f"Auto-detected GitHub repo: {github_repo}")
+        else:
+            print("Warning: Could not auto-detect GitHub repo. Commit links will be disabled.")
+
+    # Set module-level variable for render functions
+    global _github_repo
+    _github_repo = github_repo
 
     conversations = []
     current_conv = None
-    for row in rows:
-        log_type, message_json, timestamp = row["type"], row["message"], row["timestamp"]
-        is_compact_summary = row["isCompactSummary"]
-        if not message_json:
+    for entry in loglines:
+        log_type = entry.get("type")
+        timestamp = entry.get("timestamp", "")
+        is_compact_summary = entry.get("isCompactSummary", False)
+        message_data = entry.get("message", {})
+        if not message_data:
             continue
-        try:
-            message_data = json.loads(message_json)
-        except json.JSONDecodeError:
-            continue
+        # Convert message dict to JSON string for compatibility with existing render functions
+        message_json = json.dumps(message_data)
         is_user_prompt = False
         user_text = None
         if log_type == "user":
@@ -516,12 +597,12 @@ def generate_html(db_path, output_dir):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conversation Log - Page {page_num}</title>
+    <title>Claude Code transcript - page {page_num}</title>
     <style>{CSS}</style>
 </head>
 <body>
     <div class="container">
-        <h1><a href="index.html" style="color: inherit; text-decoration: none;">Conversation Log</a> - Page {page_num}/{total_pages}</h1>
+        <h1><a href="index.html" style="color: inherit; text-decoration: none;">Claude Code transcript</a> - page {page_num}/{total_pages}</h1>
         {pagination_html}
         {''.join(messages_html)}
         {pagination_html}
@@ -582,8 +663,11 @@ def generate_html(db_path, output_dir):
 
     # Add commits as separate timeline items
     for commit_ts, commit_hash, commit_msg, page_num, conv_idx in all_commits:
-        github_link = f"https://github.com/{GITHUB_REPO}/commit/{commit_hash}"
-        item_html = f'''<div class="index-commit"><a href="{github_link}"><div class="index-commit-header"><span class="index-commit-hash">{commit_hash[:7]}</span><time datetime="{html.escape(commit_ts)}" data-timestamp="{html.escape(commit_ts)}">{html.escape(commit_ts)}</time></div><div class="index-commit-msg">{html.escape(commit_msg)}</div></a></div>'''
+        if _github_repo:
+            github_link = f"https://github.com/{_github_repo}/commit/{commit_hash}"
+            item_html = f'''<div class="index-commit"><a href="{github_link}"><div class="index-commit-header"><span class="index-commit-hash">{commit_hash[:7]}</span><time datetime="{html.escape(commit_ts)}" data-timestamp="{html.escape(commit_ts)}">{html.escape(commit_ts)}</time></div><div class="index-commit-msg">{html.escape(commit_msg)}</div></a></div>'''
+        else:
+            item_html = f'''<div class="index-commit"><div class="index-commit-header"><span class="index-commit-hash">{commit_hash[:7]}</span><time datetime="{html.escape(commit_ts)}" data-timestamp="{html.escape(commit_ts)}">{html.escape(commit_ts)}</time></div><div class="index-commit-msg">{html.escape(commit_msg)}</div></div>'''
         timeline_items.append((commit_ts, "commit", item_html))
 
     # Sort by timestamp
@@ -596,12 +680,12 @@ def generate_html(db_path, output_dir):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conversation Log - Index</title>
+    <title>Claude Code transcript - Index</title>
     <style>{CSS}</style>
 </head>
 <body>
     <div class="container">
-        <h1>Conversation Log</h1>
+        <h1>Claude Code transcript</h1>
         {index_pagination}
         <p style="color: var(--text-muted); margin-bottom: 24px;">{prompt_num} prompts · {total_messages} messages · {total_tool_calls} tool calls · {total_commits} commits · {total_pages} pages</p>
         {''.join(index_items)}
@@ -615,4 +699,21 @@ def generate_html(db_path, output_dir):
 
 
 if __name__ == "__main__":
-    generate_html("/tmp/logs.db", ".")
+    parser = argparse.ArgumentParser(
+        description="Convert Claude Code session JSON to mobile-friendly HTML pages."
+    )
+    parser.add_argument(
+        "json_file",
+        help="Path to the Claude Code session JSON file"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default=".",
+        help="Output directory (default: current directory)"
+    )
+    parser.add_argument(
+        "--repo",
+        help="GitHub repo (owner/name) for commit links. Auto-detected from git push output if not specified."
+    )
+    args = parser.parse_args()
+    generate_html(args.json_file, args.output, github_repo=args.repo)
