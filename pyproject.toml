@@ -1,11 +1,12 @@
 [project]
-name = "claude-code-transcripts"
-version = "0.4"
+name = "cc-transcripts"
+version = "0.4.1"
 description = "Convert Claude Code session files to HTML transcripts"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
-    { name = "Simon Willison" }
+    { name = "Simon Willison" },
+    { name = "Toby Backstrom" }
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -18,13 +19,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/simonw/claude-code-transcripts"
-Changelog = "https://github.com/simonw/claude-code-transcripts/releases"
-Issues = "https://github.com/simonw/claude-code-transcripts/issues"
-CI = "https://github.com/simonw/claude-code-transcripts/actions"
+Homepage = "https://github.com/TobyBackstrom/claude-code-transcripts"
+Changelog = "https://github.com/TobyBackstrom/claude-code-transcripts/releases"
+Issues = "https://github.com/TobyBackstrom/claude-code-transcripts/issues"
+CI = "https://github.com/TobyBackstrom/claude-code-transcripts/actions"
 
 [project.scripts]
-claude-code-transcripts = "claude_code_transcripts:main"
+cc-transcripts = "cc_transcripts:main"
 
 [build-system]
 requires = ["uv_build>=0.9.7,<0.10.0"]

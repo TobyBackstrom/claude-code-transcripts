@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from claude_code_transcripts import (
+from cc_transcripts import (
     cli,
     find_all_sessions,
     get_project_display_name,
@@ -279,16 +279,14 @@ class TestGenerateBatchHtml:
             )
 
             # Patch generate_html to fail on one specific session
-            original_generate_html = __import__("claude_code_transcripts").generate_html
+            original_generate_html = __import__("cc_transcripts").generate_html
 
             def mock_generate_html(json_path, output_dir, github_repo=None):
                 if "session1" in str(json_path):
                     raise RuntimeError("Simulated failure")
                 return original_generate_html(json_path, output_dir, github_repo)
 
-            with patch(
-                "claude_code_transcripts.generate_html", side_effect=mock_generate_html
-            ):
+            with patch("cc_transcripts.generate_html", side_effect=mock_generate_html):
                 stats = generate_batch_html(projects_dir, output_dir)
 
             # Should have processed session2 successfully
