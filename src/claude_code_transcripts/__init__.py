@@ -43,9 +43,15 @@ GITHUB_REPO_PATTERN = re.compile(
     r"github\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)/pull/new/"
 )
 
-# Regex to strip ANSI escape codes from terminal output
+# Regex to strip ANSI escape sequences from terminal output
+# Handles OSC sequences, CSI sequences, and 7-bit C1 control codes
 ANSI_ESCAPE_PATTERN = re.compile(
-    r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\[\?[0-9]+[hl]"
+    r"""
+    \x1b(?:\].*?(?:\x07|\x1b\\)  # OSC sequences
+    |\[[0-?]*[ -/]*[@-~]         # CSI sequences
+    |[@-Z\\-_])                  # 7-bit C1 control codes
+    """,
+    re.VERBOSE | re.DOTALL,
 )
 
 # Regex patterns for slash command detection
